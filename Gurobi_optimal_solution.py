@@ -91,7 +91,6 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
     x = model.addVars(O, C, vtype='B', name='indicator')
     y = model.addVars(powerset_O, C, vtype='B', name='indicator_2') # Make it a binary Tuple
     r = model.addVars(C, lb=0, vtype='C', name='compensation')
-    z = model.addVars(C, lb=0, vtype='C', name='maximum_dummy')
     # Terms that directly depend on variables
     u = np.array([[- fixed_negative_utility - detour_matrix[o,c] + r[c] for c in range(C)] for o in range(O)])
 
@@ -99,9 +98,15 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
     model.setObjective(gp.quicksum(gp.quicksum(acc_probability[O_tilde] * y[O_tilde, c] * (cost_of_dedicated_delivery[c] - r[c]) for O_tilde in powerset_O) for c in range(C)), gp.GRB.MAXIMIZE)
 
     # Create the constraints
-    model.addConstrs((z[c] <= u[o,c] + M*(1-x[o,c]) for c in range(C) for o in range(O)), name='C1')
+    # The utility needs to be at least 0 when an OD is ought to be activated
+    model.addConstrs((u[o,c] >= - M*(1-x[o,c]) for c in range(C) for o in range(O)), name='C1')
+    # The OD will only choose the customer with the highest utility
+    model.addConstrs((u[o,c_tilde] <= u[o,c] + M*(1-x[o,c]) for c in range(C) for o in range(O) for c_tilde in range(C) if c != c_tilde), name='C1')
+    # There can be only one customer assigned to any OD
     model.addConstrs((gp.quicksum(x[o,c] for c in range(C)) <= 1 for o in range(O)), name='C2')
+    # Only the set of ODs will be serving one customer with the highest cardinality for that customer
     model.addConstrs((gp.quicksum(x[o,c] for o in [index for index, char in enumerate(O_tilde) if char == '1'])/cardinality[O_tilde] + M*(1-y[O_tilde, c]) >= 1 for O_tilde in powerset_O_w_0 for c in range(C)), name='C3')
+    # There is always one set (possibly the empty set) of Ods serving a certain customer
     model.addConstrs((gp.quicksum(y[O_tilde,c] for O_tilde in powerset_O) == 1 for c in range(C)), name='C4')
 
     # Optimize
@@ -125,8 +130,8 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
         print('Something went wrong')
         
 if __name__ == '__main__':
-    random.seed(1)
-    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(3)]
+    random.seed(7)
+    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(10)]
     C = len(Customer_locations)
     OD_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(10)]
     O = len(OD_locations)
@@ -136,7 +141,7 @@ if __name__ == '__main__':
     # Detour Matrix
     detour_matrix = np.array([[distance[0,c] + distance[c,o] - distance[0,o] for c in range(1 + O,1 + O + C)] for o in range(1, 1 + O)])
     # Cost of DDs
-    cost_of_dedicated_delivery = np.full(C, 7)
+    cost_of_dedicated_delivery = np.full(C, 10)
     # Arrival probabilities
     individual_arrival_probabilities = np.full(O, 0.5)
     # fixed unavoidable costs
