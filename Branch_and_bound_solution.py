@@ -13,6 +13,7 @@ import random
 from copy import copy
 from collections import defaultdict, deque
 from scipy.spatial import distance_matrix
+from scipy.optimize import linear_sum_assignment
 
 class branch_and_bound_ODCP():
     def __init__(self, detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility = 0):
@@ -27,6 +28,7 @@ class branch_and_bound_ODCP():
         self.current_assignment_matrix = np.zeros(detour_matrix.shape)
         self.unique_assignment_matrix = np.zeros(detour_matrix.shape)
         self.current_utility_matrix = - self.detour_matrix - fixed_negative_utility
+        self.base_utility_matrix = np.copy(self.current_utility_matrix)
         self.current_PAL = list(range(self.C))
 
     def greedy_inclusion(self):
@@ -44,31 +46,35 @@ class branch_and_bound_ODCP():
         The optimal solution is updated as attributes so there is no input and no output of the method
         '''
         change_profitable = True
+        current_threshold = 0
         while change_profitable:
             change_profitable = False
-            # Identify currently maximum utility unassigned OD customer combination
-            customers_unassigned = np.all(self.unique_assignment_matrix == 0, axis=0)
-            ODs_unassigned = np.all(self.unique_assignment_matrix == 0, axis=1)
-
-            # Create a masked version of the number matrix for condition 1
-            mask_condition_1 = np.outer(ODs_unassigned, customers_unassigned)
-            masked_number_matrix_1 = np.where(mask_condition_1, self.current_utility_matrix, -np.inf)
-
-            # Find the index of the highest value for condition 1
-            max_index_1 = np.unravel_index(np.argmax(masked_number_matrix_1), masked_number_matrix_1.shape)
-
-            # For condition 2, we consider rows only
-            mask_condition_2 = ODs_unassigned[:, np.newaxis]
-            masked_number_matrix_2 = np.where(mask_condition_2, self.current_utility_matrix, -np.inf)
-
-            # Find the index of the highest value for condition 2
-            max_index_2 = np.unravel_index(np.argmax(masked_number_matrix_2), masked_number_matrix_2.shape)
-
-            index_list = [max_index_1, max_index_2]
-            current_threshold = self.current_max
+            UAM_bool = self.current_assignment_matrix.astype(bool)
+            # We loop through all customers and find the minimum increase compensation for one assingment shift
+            index_list = []
+            for c in range(self.C):
+                for o in range(self.O):
+                    if np.any(UAM_bool[o, :]):
+                        currently_assigned_c = np.where(UAM_bool[o, :] == True)[0]
+                    else:
+                        currently_assigned_c = False
+                    if ~UAM_bool[o, c]:
+                        UAM_bool_copy = np.copy(UAM_bool)
+                        if currently_assigned_c is not False:
+                            UAM_bool_copy[o, currently_assigned_c] = False
+                        UAM_bool_copy[o, c] = True
+                        if self.raise_possible_without_altering_other_assignments(UAM_bool_copy):
+                            index_list.append((o, c))
+                        else:
+                            continue
             for index in range(len(index_list)):
-                copy_assign = np.copy(self.unique_assignment_matrix)
-                copy_assign[index_list[index][0], index_list[index][1]] = 1
+                copy_assign = np.copy(self.unique_assignment_matrix).astype(bool)
+                if np.any(copy_assign[index_list[index][0], :]):
+                    currently_assigned_c = np.where(copy_assign[index_list[index][0], :] == True)[0]
+                    copy_assign[index_list[index][0], currently_assigned_c] = False
+                else:
+                    currently_assigned_c = False
+                copy_assign[index_list[index][0], index_list[index][1]] = True
                 true_assignment_matrix, compensations, utils = self.calculate_real_assignment_matrix_from_unique_assignment_matrix(copy_assign) 
                 if type(true_assignment_matrix) == str:
                     continue
@@ -78,16 +84,16 @@ class branch_and_bound_ODCP():
                     opt_assignment = copy_assign
                     opt_compensation = compensations
                     opt_util = utils
-                    next_maximum = expected_savings
+                    current_threshold = expected_savings
                     opt_true_assignment = true_assignment_matrix
             if change_profitable == True:
-                self.current_max = next_maximum
+                self.current_max = current_threshold
                 self.current_best_solution = opt_compensation
                 print(self.current_best_solution)
                 self.unique_assignment_matrix = opt_assignment
-                print(self.current_assignment_matrix)
+                print(self.unique_assignment_matrix.astype(int))
                 self.current_utility_matrix = opt_util
-                print(self.current_utility_matrix)
+                #print(self.current_utility_matrix)
                 self.current_assignment_matrix = opt_true_assignment
 
     def necessary_increase(self, c, utility_mat, UAM_bool):
@@ -126,6 +132,13 @@ class branch_and_bound_ODCP():
             print('This assignment matrix is impossible.')
             return 'Not a valid assignment'
 
+    def raise_possible_without_altering_other_assignments(self, UAM_bool_copy):
+        real_assignments, a, b = self.calculate_real_assignment_matrix_from_unique_assignment_matrix(UAM_bool_copy)
+        if np.any(real_assignments != UAM_bool_copy):
+            return False
+        else:
+            return True
+
     def calculate_real_assignment_matrix_from_unique_assignment_matrix(self, UAM):
         '''
         This function calculates the utility matrix from a unique assignment matrix (UAM)
@@ -153,7 +166,7 @@ class branch_and_bound_ODCP():
         increase_vals = {}
         for c in range(self.C):
             if customers_assigned[c]:
-                increase_vals[c] = np.min(self.base_utility_matrix[:, c][UAM_bool[:, c]])
+                increase_vals[c] = - np.min(self.base_utility_matrix[:, c][UAM_bool[:, c]])
                 utility_mat[:, c] = utility_mat[:, c] + increase_vals[c]
 
         # Loop through all customers assigned
@@ -208,7 +221,7 @@ class branch_and_bound_ODCP():
             util = u[o,c]
             logical = u[o, :] == util
             current_list = [c, []]
-            for cs in np.arange(self.C)[logical][0]:
+            for cs in np.arange(self.C)[logical]:
                 if cs != c:
                     current_list[1].append(cs)
             conditions.append(current_list)

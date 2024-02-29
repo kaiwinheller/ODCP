@@ -10,9 +10,10 @@
 
 import numpy as np
 import random
-from itertools import chain, combinations, product
+from itertools import product
 from scipy.spatial import distance_matrix
 import gurobipy as gp
+from scipy.optimize import linear_sum_assignment
 
 # Helper Function
 def binary_tuples(n):
@@ -86,7 +87,7 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
 
     # Create the Model
     model = gp.Model("ODCP")
-
+    model.setParam('OutputFlag', 0)
     # Create the Variables
     x = model.addVars(O, C, vtype='B', name='indicator')
     y = model.addVars(powerset_O, C, vtype='B', name='indicator_2') # Make it a binary Tuple
@@ -115,23 +116,25 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
     # Output Parameters
     if model.status == gp.GRB.OPTIMAL:
         objective_value = model.ObjVal
-        print(f"Objective Value: {objective_value}")
+        #print(f"Objective Value: {objective_value}")
 
         variable_values = [model.getVarByName(f'compensation[{c}]').X for c in range(C)]
         for i, comp in enumerate(variable_values):
             print(f'Compensation for customer {i} = {comp}')
+            pass
 
-        assignments = [(o, c) for o in range(O) for c in range(C) if model.getVarByName(f'indicator[{o},{c}]').X == 1]
+        assignments = np.array([[model.getVarByName(f'indicator[{o},{c}]').X for c in range(C)] for o in range(O)])
         for a in assignments:
             print(f'OD {a[0]} is visiting customer {a[1]}')
+            pass
 
         return objective_value, variable_values, assignments
     else:
         print('Something went wrong')
         
 if __name__ == '__main__':
-    random.seed(7)
-    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(10)]
+    random.seed(8)
+    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(4)]
     C = len(Customer_locations)
     OD_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(10)]
     O = len(OD_locations)
@@ -140,12 +143,24 @@ if __name__ == '__main__':
     distance = distance_matrix(total_location_list, total_location_list)
     # Detour Matrix
     detour_matrix = np.array([[distance[0,c] + distance[c,o] - distance[0,o] for c in range(1 + O,1 + O + C)] for o in range(1, 1 + O)])
+    row_ind, col_ind = linear_sum_assignment(detour_matrix)
+    # Initialize a binary matrix of the same shape as M
+    binary_matrix = np.zeros(detour_matrix.shape, dtype=int)
+
+    # Set the assignments in the binary matrix to 1
+    binary_matrix[row_ind, col_ind] = 1
+    print(binary_matrix)
+    individual_arrival_probabilities = np.array([random.uniform(0,1) for o in range(O)])
+    #individual_arrival_probabilities = np.full(O, 0.5)
     # Cost of DDs
-    cost_of_dedicated_delivery = np.full(C, 10)
+    cost_of_dedicated_delivery = np.full(C, 1000)
     # Arrival probabilities
-    individual_arrival_probabilities = np.full(O, 0.5)
+    #individual_arrival_probabilities = np.array([random.uniform(0,1) for o in range(O)])
     # fixed unavoidable costs
     fixed_negative_utility = 1
 
-    objective_value, variables, assignments = optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility )
+    objective_value, variables, assignments2 = optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility )
+    print(assignments2)
+
+    
 
