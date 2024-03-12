@@ -12,6 +12,7 @@ import numpy as np
 import random
 from copy import copy
 from collections import defaultdict, deque
+from itertools import permutations
 from scipy.spatial import distance_matrix
 from scipy.optimize import linear_sum_assignment
 
@@ -30,6 +31,211 @@ class branch_and_bound_ODCP():
         self.current_utility_matrix = - self.detour_matrix - fixed_negative_utility
         self.base_utility_matrix = np.copy(self.current_utility_matrix)
         self.current_PAL = list(range(self.C))
+
+    def create_divide_and_counquer_solution(self):
+        '''
+        This function outputs the best soltion for the case in which all customers are viewed separately
+        '''
+        compensations = np.full(self.C, 0).astype(float)
+        for c in range(self.C):
+            expected_savings_now = 0
+            for o in sorted(range(self.O), key = lambda d: - self.base_utility_matrix[d,c]):
+                expected_savings_when_including_o = self.expected_savings_when_compensation_is_raised_in_order_to_include_o(o, c)
+                if expected_savings_when_including_o > expected_savings_now:
+                    compensations[c] = - self.base_utility_matrix[o,c]
+                    expected_savings_now = expected_savings_when_including_o
+                else:
+                    break
+
+        return compensations
+
+    def expected_savings_when_compensation_is_raised_in_order_to_include_o(self, o, c):
+        '''
+        This function checks, whether increasing the compensation for c results in a savings increase
+        if all network-effects are neglected
+        '''
+        compensation = - self.base_utility_matrix[o,c]
+        savings_generated_if_served = self.cost_of_dedicated_delivery[c] - compensation
+        utilities_customer = self.base_utility_matrix[:, c] + compensation
+        ODs_motivated = np.where(utilities_customer >= 0)[0]
+        serving_probability = 1 - np.product(([1 - individual_arrival_probabilities[ODs_motivated]]))
+        expected_savings = serving_probability * savings_generated_if_served
+        return expected_savings
+    
+    def neighborhood_search_lower_one_compensation(self, solution, expected_savings_now, best_assignment):
+        best_solution = solution
+        found_a_better_solution = False
+        for c in range(self.C):
+            lowered_compensation_solution = self.get_lowered_compensation_solution_for_customer_c(c, np.copy(solution))
+            expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(lowered_compensation_solution)
+            if expected_savings_for_solution > expected_savings_now:
+                found_a_better_solution = True
+                best_solution = lowered_compensation_solution
+                best_assignment = assignment
+                expected_savings_now = expected_savings_for_solution
+        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
+    
+    def get_increased_compensation_solution_for_customer_c(self, c, solution):
+        utility_vector_for_c = self.base_utility_matrix[:, c] + solution[c]
+        try:
+            compensation_increase_needed = - max(utility_vector_for_c[utility_vector_for_c < 0])
+        except ValueError:
+            compensation_increase_needed = 0
+        solution[c] = solution[c] + compensation_increase_needed
+        return solution
+    
+    def neighborhood_search_upper_one_compensation(self, solution, expected_savings_now, best_assignment):
+        best_solution = solution
+        found_a_better_solution = False
+        for c in range(self.C):
+            increased_compensation_solution = self.get_increased_compensation_solution_for_customer_c(c, np.copy(solution))
+            expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(increased_compensation_solution)
+            if expected_savings_for_solution > expected_savings_now:
+                found_a_better_solution = True
+                best_solution = increased_compensation_solution
+                best_assignment = assignment
+                expected_savings_now = expected_savings_for_solution
+        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
+    
+    def initialize_search_parameters(self, length_of_neighborhood_list):
+        found_a_better_solution = [None for n in range(length_of_neighborhood_list)]
+        best_solution = [None for n in range(length_of_neighborhood_list)]
+        best_assignment = [None for n in range(length_of_neighborhood_list)]
+        expected_savings_now = [None for n in range(length_of_neighborhood_list)]
+        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
+    
+    def extract_best_solution(self, found_a_better_solution, best_solution, best_assignment, expected_savings_now):
+        best_solution_index = np.argmax(expected_savings_now)
+        best_solution_of_the_search = best_solution[best_solution_index]
+        best_assignment_of_the_search = best_assignment[best_solution_index]
+        best_objective_value = expected_savings_now[best_solution_index]
+        return found_a_better_solution, best_solution_of_the_search, best_assignment_of_the_search, best_objective_value
+    
+    def neighborhood_search(self, solution):
+        expected_savings_now, best_assignment = self.expected_savings_for_a_solution(solution)
+        neighborhood_list = [self.neighborhood_search_lower_one_compensation, self.neighborhood_search_upper_one_compensation]
+        found_a_better_solution, best_solution, best_assignment, best_expected_savings = self.initialize_search_parameters(len(neighborhood_list))
+        for count, neighborhood in enumerate(neighborhood_list):
+            found_a_better_solution[count], best_solution[count], best_assignment[count], best_expected_savings[count] = neighborhood(solution, expected_savings_now, best_assignment)
+        if any(found_a_better_solution):
+            found_a_better_solution, best_solution_of_the_search, best_assignment_of_the_search, best_objective_value = self.extract_best_solution(found_a_better_solution, best_solution, best_assignment, best_expected_savings)
+            return True, best_solution_of_the_search, best_assignment_of_the_search, best_objective_value
+        else:
+            return False, solution, best_assignment, expected_savings_now
+
+    def iterative_decrease_a_solution_by_best_fit(self, solution):
+        '''
+        This function takes in a solution in form of a compensation array and iteratively improves it by
+        decreasing single compensations in order to exclude one of the ODs out of accepting range.
+        '''
+        while True:
+            expected_savings_now, _ = self.expected_savings_for_a_solution(solution)
+            found_a_better_solution, solution_found, assignment, objective_value = self.neighborhood_search(solution)
+            if found_a_better_solution:
+                solution = solution_found
+            else:
+                return solution
+
+    def get_lowered_compensation_solution_for_customer_c(self, c, solution):
+        '''
+        This method returns the solution that materializes as the compensation for c is decreased
+        as much as needed for the next OD(s) to be excluded'''
+        utility_vector_for_c = self.base_utility_matrix[:, c] + solution[c]
+        try:
+            compensation_decrease_needed = min(utility_vector_for_c[utility_vector_for_c > 0])
+        except ValueError:
+            compensation_decrease_needed = solution[c]
+        solution[c] = solution[c] - compensation_decrease_needed
+        return solution
+    
+    def create_binary_matrix(self, U):
+        max_values = np.max(U, axis=1)
+        mask_positive = U >= 0
+        mask_max = U == max_values[:, np.newaxis]
+        A = mask_positive & mask_max
+        return A.astype(int)
+    
+    def extract_ODs_that_are_indifferent(self, matrix):
+        mask = (matrix > 0).sum(axis=1) > 1
+        ODs = np.where(mask)[0]
+        return ODs
+    
+    def get_column_indices(self, ODs, A):
+        """
+        Get column indices that have at least one occurrence of 1 in any of the specified rows.
+
+        Args:
+        ODs (list): List of indices of rows.
+        A (numpy.ndarray): Binary matrix.
+
+        Returns:
+        list: List of column indices.
+        """
+        # Extract specified rows from binary matrix A
+        specified_rows = A[ODs]
+
+        # Find column indices where there is at least one occurrence of 1 in any of the specified rows
+        column_indices = np.where(np.any(specified_rows == 1, axis=0))[0]
+
+        return column_indices
+    
+    def adjust_the_assignments_according_to_the_PAL(self, PAL, assignments):
+        updated_assignments = assignments.copy()
+
+        # Iterate through indices in preference order
+        for count, idx in enumerate(PAL):
+            # Check if the current index is already assigned
+            if assignments[idx] == 1:
+                # Update indices with lower index to 0 if they are currently unassigned
+                for i in PAL[(count+1):]:
+                    if updated_assignments[i] == 1:
+                        updated_assignments[i] = 0
+                break
+
+        return updated_assignments
+    
+    def get_expected_savings_from_assignment_and_solution(self, assignment_matrix, solution):
+        expected_savings = 0
+        for c in range(self.C):
+            serving_probability = 1 - np.product(([1 - self.individual_arrival_probabilities[np.where(assignment_matrix[:, c] == 1)]]))
+            savings_if_served = self.cost_of_dedicated_delivery[c] - solution[c]
+            expected_savings += serving_probability * savings_if_served
+
+        return expected_savings
+    
+    def expected_savings_for_a_solution(self, solution):
+        '''
+        This method returns the expected savings that results form a solution
+        Sometimes the problem is a Tie-Breaking when the utility for two or more customers is equal
+        for an OD. in this case we can increase the compensation of a customer a little tiny bit 
+        (by a small invisible fraction), that is represented by a priority allocation list (PAL)
+        This might be terribly slow in some instances but we might get it working.
+        '''
+        solution = solution
+        utility_matrix_now = np.around(self.base_utility_matrix + solution, 5) # Here is a potential error since I don't know in which dimension its added
+        base_assignment_matrix = self.create_binary_matrix(utility_matrix_now)
+
+        # Handling of the case where one ore more ODs are indifferent
+        ODs_that_are_indifferent = self.extract_ODs_that_are_indifferent(base_assignment_matrix)
+        customers_that_are_affected = self.get_column_indices(ODs_that_are_indifferent, base_assignment_matrix)
+        if list(ODs_that_are_indifferent):
+            list_of_permutations_of_the_affected_customers = list(permutations(customers_that_are_affected))
+            best_expected_savings_so_far = 0
+            for permutation in list_of_permutations_of_the_affected_customers:
+                assignment_matrix = np.copy(base_assignment_matrix)
+                for o in ODs_that_are_indifferent:
+                    assignment_matrix[o, :] = self.adjust_the_assignments_according_to_the_PAL(permutation, base_assignment_matrix[o, :])
+                expected_savings_for_that_assignment = self.get_expected_savings_from_assignment_and_solution(assignment_matrix, solution)
+                if expected_savings_for_that_assignment > best_expected_savings_so_far:
+                    best_assignment = assignment_matrix
+                    best_expected_savings_so_far = expected_savings_for_that_assignment
+        else:
+            best_assignment = base_assignment_matrix
+            best_expected_savings_so_far = self.get_expected_savings_from_assignment_and_solution(best_assignment, solution)
+
+        return best_expected_savings_so_far, best_assignment
+
+# --------------- Not included ------------------- #
 
     def greedy_inclusion(self):
         '''
@@ -303,189 +509,9 @@ class branch_and_bound_ODCP():
                 pass
         return assignment_matrix_copy
 
-# ________________________________ Not Used as of NOW ________________________________________________
-
-
-    def increase_compensation_for_c_till_new_inclusion(self, c):
-        assignment_matrix_copy = np.copy(self.current_assignment_matrix)
-        compensations_copy = np.copy(self.current_best_solution)
-        utility_matrix_copy = np.copy(self.current_utility_matrix)
-        PAL_copy = copy(self.current_PAL)
-        
-        # Identify the OD that is added to the mix
-        ODs_without_ones = np.all(assignment_matrix_copy == 0, axis=1)
-        # Apply the logical array to mask the column, then find the index of the max value in that column
-        max_index = np.argmax(utility_matrix_copy[ODs_without_ones, c])
-        # The result is directly in terms of the original indices where the logical condition is True
-        o = np.where(ODs_without_ones)[0][max_index]  # Map to the original row index
-        increase_level = assignment_matrix_copy[o, c] - compensations_copy[c]
-
-        # Check if there is a switch in assignment for other ODs associated with that assignment
-        ODs_with_ones = ~ODs_without_ones
-        new_utility_for_c = utility_matrix_copy[ODs_with_ones, c]
-
-
-        # Calculate new compensation for c based on utility differences and current assignments
-        currently_assigned_c = np.where(assignment_matrix_copy[o, :] == 1)[0]
-        increase_level = np.around(utility_diffs[o], 4)
-        if increase_level < 0:
-            improvement = False
-        else:
-            improvement = True
-
-        # Update compensation for c
-        compensations_copy[c] = compensations_copy[c] + increase_level
-        # Update utility matrix for c
-        utility_matrix_copy[:, c] += (compensations_copy[c] - self.current_best_solution[c])
-        if currently_assigned_c.size > 0 and utility_matrix_copy[o, c] == utility_matrix_copy[o, currently_assigned_c]:
-            # Update the PAL-list
-            index_to_reassign = 0 #PAL_copy.index(currently_assigned_c)
-            PAL_copy.remove(c)
-            PAL_copy.insert(index_to_reassign, c)
-        if increase_level < 0:
-            return compensations_copy, assignment_matrix_copy, utility_matrix_copy, improvement
-        
-        # Reassign os based on updated utility matrix and PAL
-        for o in range(O):
-            # Find c with the highest utility for each o, considering PAL for ties
-            preferences = np.argsort(-utility_matrix_copy[o, :])  # Sort cs by decreasing utility for o
-            preferences = sorted(preferences, key=lambda x: (-utility_matrix_copy[o, x], PAL_copy.index(x)))
-            best_c = preferences[0]
-            assignment_matrix_copy[o, :] = 0  # Remove o from all cs
-            if utility_matrix_copy[o, preferences[0]] >= 0:
-                assignment_matrix_copy[o, best_c] = 1  # Assign o to the best c
-            else:
-                pass
-        
-        return compensations_copy, assignment_matrix_copy, utility_matrix_copy, improvement
-
-    def increase_compensation_for_c_till_o_joins(self, c, o):
-        assignment_matrix_copy = np.copy(self.current_assignment_matrix)
-        compensations_copy = np.copy(self.current_best_solution)
-        utility_matrix_copy = np.copy(self.current_utility_matrix)
-        PAL_copy = copy(self.current_PAL)
-        if assignment_matrix_copy[o, c] == 1:
-            return compensations_copy, assignment_matrix_copy, utility_matrix_copy, False
-        
-        # Compute the maximum of 0 and each element in the row-wise max of utility_matrix_copy
-        first_term = np.maximum(0, np.max(utility_matrix_copy, axis=1))
-
-        # Subtract utility_matrix_copy[:, c] from this first_term
-        utility_diffs = first_term - utility_matrix_copy[:, c]
-
-        # Calculate new compensation for c based on utility differences and current assignments
-        currently_assigned_c = np.where(assignment_matrix_copy[o, :] == 1)[0]
-        increase_level = np.around(utility_diffs[o], 4)
-        if increase_level < 0:
-            improvement = False
-        else:
-            improvement = True
-
-        # Update compensation for c
-        compensations_copy[c] = compensations_copy[c] + increase_level
-        # Update utility matrix for c
-        utility_matrix_copy[:, c] += (compensations_copy[c] - self.current_best_solution[c])
-        if currently_assigned_c.size > 0 and utility_matrix_copy[o, c] == utility_matrix_copy[o, currently_assigned_c]:
-            # Update the PAL-list
-            index_to_reassign = 0 #PAL_copy.index(currently_assigned_c)
-            PAL_copy.remove(c)
-            PAL_copy.insert(index_to_reassign, c)
-        if increase_level < 0:
-            return compensations_copy, assignment_matrix_copy, utility_matrix_copy, improvement
-        
-        # Reassign os based on updated utility matrix and PAL
-        for o in range(O):
-            # Find c with the highest utility for each o, considering PAL for ties
-            preferences = np.argsort(-utility_matrix_copy[o, :])  # Sort cs by decreasing utility for o
-            preferences = sorted(preferences, key=lambda x: (-utility_matrix_copy[o, x], PAL_copy.index(x)))
-            best_c = preferences[0]
-            assignment_matrix_copy[o, :] = 0  # Remove o from all cs
-            if utility_matrix_copy[o, preferences[0]] >= 0:
-                assignment_matrix_copy[o, best_c] = 1  # Assign o to the best c
-            else:
-                pass
-        
-        return compensations_copy, assignment_matrix_copy, utility_matrix_copy, improvement
-    
-    def decrease_compensation_for_c_till_o_joins(self, c, o):
-        assignment_matrix_copy = np.copy(self.current_assignment_matrix)
-        compensations_copy = np.copy(self.current_best_solution)
-        utility_matrix_copy = np.copy(self.current_utility_matrix)
-        PAL_copy = copy(self.current_PAL)
-        if assignment_matrix_copy[o, c] == 0:
-            return compensations_copy, assignment_matrix_copy, utility_matrix_copy, False
-        
-        # Compute the maximum utility of all ODs associated with c that are assigned to c
-        mask = (assignment_matrix_copy[:, c] == 1) & (utility_matrix_copy[:, c] < utility_matrix_copy[o, c])
-
-        # Identify what the necessary decrease amount is
-        if np.any(mask):
-            utility_of_lower_relevant_OD = np.max(utility_matrix_copy[:, c][mask], axis=0)
-            required_decrease = utility_matrix_copy[o, c] - utility_of_lower_relevant_OD
-        else:
-            required_decrease = utility_matrix_copy[o, c]
-
-        # Calculate new compensation for c based on required_decrease
-        if required_decrease > 0:
-            improvement = True
-        else:
-            improvement = False
-
-        # Update compensation for c
-        compensations_copy[c] = compensations_copy[c] - required_decrease
-
-        # Update utility matrix for c
-        utility_matrix_copy[:, c] -= required_decrease
-        
-        # Reassign os based on updated utility matrix and PAL
-        for o in range(O):
-            # Find c with the highest utility for each o, considering PAL for ties
-            preferences = np.argsort(-utility_matrix_copy[o, :])  # Sort cs by decreasing utility for o
-            preferences = sorted(preferences, key=lambda x: (-utility_matrix_copy[o, x], PAL_copy.index(x)))
-            best_c = preferences[0]
-            assignment_matrix_copy[o, :] = 0  # Remove o from all cs
-            if utility_matrix_copy[o, preferences[0]] >= 0:
-                assignment_matrix_copy[o, best_c] = 1  # Assign o to the best c
-            else:
-                pass
-        
-        return compensations_copy, assignment_matrix_copy, utility_matrix_copy, improvement
-
-    def calculate_expected_savings(self, compensation_vector, assignment_matrix):
-        '''
-        Description: The function calculates the savings (which are to maximize) of a certain policy.
-        The policy is represented by an assignment matrix, which assigns a customer to an OD and 
-        a compensation vector, which holds compensations for every customer.
-
-        Parameters:
-        compensation_vector:
-        Type: np.array() (size C)
-        Description: Vector of compensations
-
-        assignment_matrix:
-        Type: np.array() (size (O,C))
-        Description: Binary matrix with 1 indicating that an OD is assigned to a customer and 0 if not
-
-        Output:
-        expected_savings:
-        Type: float
-        Description: the expected savings considering the policy
-        '''
-        # Calculate the serving probability
-        no_show_probability_matrix = 1 - assignment_matrix * self.individual_arrival_probabilities[:, np.newaxis]
-
-        # Calculate the probability that a customer is served
-        serving_probability = 1 - np.prod(no_show_probability_matrix, axis=0)
-
-        # calculate the expected costs
-        expected_savings = np.matmul(serving_probability, (self.cost_of_dedicated_delivery - compensation_vector).T)
-
-        return expected_savings
-        
-
 
 if __name__ == '__main__':
-    random.seed(7)
+    random.seed(9)
     Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(3)]
     C = len(Customer_locations)
     OD_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(3)]
@@ -495,15 +521,31 @@ if __name__ == '__main__':
     distance = distance_matrix(total_location_list, total_location_list)
     # Detour Matrix
     detour_matrix = np.array([[distance[0,c] + distance[c,o] - distance[0,o] for c in range(1 + O,1 + O + C)] for o in range(1, 1 + O)])
+    '''
+    detour_matrix = np.array([
+        [20, 17, 16.5],
+        [21, 16, 19],
+        [19, 15, 18]
+    ])
+    '''
     # Cost of DDs
-    cost_of_dedicated_delivery = np.full(C, 1000)
+    cost_of_dedicated_delivery = np.full(C, 30)
     # Arrival probabilities
     individual_arrival_probabilities = np.full(O, 0.5)
     # fixed unavoidable costs
     fixed_negative_utility = 1
 
-    Instance = branch_and_bound_ODCP(detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility )
-    Instance.greedy_inclusion()
+    Instance = branch_and_bound_ODCP(detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility)
+    solution = Instance.create_divide_and_counquer_solution()
+    print(f'Initial solution: {solution} Objective value: {Instance.expected_savings_for_a_solution(solution)[0]}')
+
+    solution = Instance.iterative_decrease_a_solution_by_best_fit(solution)
+    print(f'Enhanced solution: {solution} Objective value: {Instance.expected_savings_for_a_solution(solution)[0]}')
+
+
+
+
+
 
 
 

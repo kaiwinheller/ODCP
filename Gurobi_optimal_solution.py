@@ -125,7 +125,7 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
 
         assignments = np.array([[model.getVarByName(f'indicator[{o},{c}]').X for c in range(C)] for o in range(O)])
         for a in assignments:
-            print(f'OD {a[0]} is visiting customer {a[1]}')
+            #print(f'OD {a[0]} is visiting customer {a[1]}')
             pass
 
         return objective_value, variable_values, assignments
@@ -133,27 +133,34 @@ def optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_a
         print('Something went wrong')
         
 if __name__ == '__main__':
-    random.seed(8)
-    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(4)]
+    random.seed(9)
+    Customer_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(3)]
     C = len(Customer_locations)
-    OD_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(10)]
+    OD_locations = [(random.uniform(-10, 10), random.uniform(-10, 10)) for _ in range(3)]
     O = len(OD_locations)
     depot_location = [(0,0)]
     total_location_list = depot_location + OD_locations + Customer_locations
     distance = distance_matrix(total_location_list, total_location_list)
     # Detour Matrix
     detour_matrix = np.array([[distance[0,c] + distance[c,o] - distance[0,o] for c in range(1 + O,1 + O + C)] for o in range(1, 1 + O)])
+    '''
+    detour_matrix = np.array([
+        [20, 17, 16.5],
+        [21, 16, 19],
+        [19, 15, 18]
+    ])
+    '''
     row_ind, col_ind = linear_sum_assignment(detour_matrix)
     # Initialize a binary matrix of the same shape as M
     binary_matrix = np.zeros(detour_matrix.shape, dtype=int)
-
+    print(detour_matrix)
     # Set the assignments in the binary matrix to 1
     binary_matrix[row_ind, col_ind] = 1
     print(binary_matrix)
-    individual_arrival_probabilities = np.array([random.uniform(0,1) for o in range(O)])
-    #individual_arrival_probabilities = np.full(O, 0.5)
+    #individual_arrival_probabilities = np.array([random.uniform(0,1) for o in range(O)])
+    individual_arrival_probabilities = np.full(O, 0.5)
     # Cost of DDs
-    cost_of_dedicated_delivery = np.full(C, 1000)
+    cost_of_dedicated_delivery = np.full(C, 30)
     # Arrival probabilities
     #individual_arrival_probabilities = np.array([random.uniform(0,1) for o in range(O)])
     # fixed unavoidable costs
@@ -161,6 +168,6 @@ if __name__ == '__main__':
 
     objective_value, variables, assignments2 = optimize_instance_2D(detour_matrix, cost_of_dedicated_delivery, individual_arrival_probabilities, fixed_negative_utility )
     print(assignments2)
-
+    print(objective_value)
     
 
