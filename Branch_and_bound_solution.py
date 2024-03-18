@@ -204,7 +204,7 @@ class branch_and_bound_ODCP():
         The difference from the other function is, that this time the 
         utility is not decreased to 0 as much as possible in order to not
         affect any other assignments'''
-        utility_mat = self.get_utility_mat
+        utility_mat = self.get_utility_mat(solution)
         solution_copy = np.copy(solution)
         try:
             # Maximum Utility Vector
@@ -232,7 +232,7 @@ class branch_and_bound_ODCP():
             return solution_copy
     
     def get_decrease_without_harm_solution_for_customer_c(self, c, solution):
-        utility_mat = self.get_utility_mat
+        utility_mat = self.get_utility_mat(solution)
         solution_copy = np.copy(solution)
         try:
             # Maximum Utility Vector
@@ -267,23 +267,23 @@ class branch_and_bound_ODCP():
         The difference from the other function is, that this time the 
         utility is not decreased to 0 as much as possible in order to not
         affect any other assignments'''
-        utility_mat = self.get_utility_mat
+        utility_mat = self.get_utility_mat(solution)
         solution_copy = np.copy(solution)
-        try:
-            # Maximum Utility Vector
-            maximum_utility_vector = np.max(utility_mat, axis= 1)
-            # c-th column of the utility mat
-            c_column = utility_mat[:,c]
-            # Differences of the two
-            differences_vector = c_column - maximum_utility_vector
-            # Get the binary vector with differences
-            differences_vector_binary = differences_vector[differences_vector < 0]
-            # Check how many possible assignments are made
-            minimum_necessary_increase = np.max(differences_vector[differences_vector_binary])
-            solution_copy[:, c] -= minimum_necessary_increase
-            return solution_copy
-        except:
-            return solution_copy
+        #try:
+        # Maximum Utility Vector
+        maximum_utility_vector = np.max(utility_mat, axis= 1)
+        # c-th column of the utility mat
+        c_column = utility_mat[:,c]
+        # Differences of the two
+        differences_vector = c_column - maximum_utility_vector
+        # Get the binary vector with differences
+        differences_vector_binary = differences_vector[differences_vector < 0]
+        # Check how many possible assignments are made
+        minimum_necessary_increase = np.max(differences_vector[differences_vector_binary])
+        solution_copy[:, c] -= minimum_necessary_increase
+        return solution_copy
+        #except:
+        #    return solution_copy
     
     def create_binary_matrix(self, U):
         max_values = np.max(U, axis=1)
