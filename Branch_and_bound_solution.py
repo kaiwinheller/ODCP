@@ -68,6 +68,29 @@ class branch_and_bound_ODCP():
             increased_compensation_solution = self.get_lowered_compensation_solution_for_customer_c(c, np.copy(solution))
             solution_list.append(increased_compensation_solution)
         return solution_list
+
+    def neighborhood_search_lower_one_compensation_necessary(self, solution):
+        solution_list = []
+        for c in range(self.C):
+            increased_compensation_solution = self.get_necessary_lowered_compensation_solution_for_customer_c(c, np.copy(solution))
+            solution_list.append(increased_compensation_solution)
+        return solution_list
+    
+    def neighborhood_search_higher_one_compensation_necessary(self, solution):
+        solution_list = []
+        for c in range(self.C):
+            increased_compensation_solution = self.get_necessary_increased_compensation_solution_for_customer_c(c, np.copy(solution))
+            solution_list.append(increased_compensation_solution)
+        return solution_list
+    
+    def neighborhood_search_lower_one_compensation_withouth_harm(self, solution):
+        solution_list = []
+        for c in range(self.C):
+            increased_compensation_solution = self.get_decrease_without_harm_solution_for_customer_c(c, np.copy(solution))
+            solution_list.append(increased_compensation_solution)
+        return solution_list
+    
+
     
     def get_increased_compensation_solution_for_customer_c(self, c, solution):
         utility_vector_for_c = self.base_utility_matrix[:, c] + solution[c]
@@ -97,7 +120,11 @@ class branch_and_bound_ODCP():
         best_solution = np.copy(solution)
         found_a_better_solution = False
         # Hier wird die gesamte Nachbarschaft erstellt (Die Funktionen sollten hier die solutions wiedergeben)
-        neighborhood_functions = [self.neighborhood_search_lower_one_compensation(np.copy(solution)), self.neighborhood_search_upper_one_compensation(np.copy(solution))]
+        neighborhood_functions = [self.neighborhood_search_lower_one_compensation(np.copy(solution)),
+                                  self.neighborhood_search_upper_one_compensation(np.copy(solution)),
+                                  self.neighborhood_search_lower_one_compensation_withouth_harm(np.copy(solution)),
+                                  self.neighborhood_search_higher_one_compensation_necessary(solution),
+                                  self.neighborhood_search_lower_one_compensation_necessary(solution)]
         neighborhood_list = [item for sublist in neighborhood_functions for item in sublist]
         for sol in neighborhood_list:
             expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(sol)
@@ -132,6 +159,131 @@ class branch_and_bound_ODCP():
             compensation_decrease_needed = solution[c]
         solution[c] = solution[c] - compensation_decrease_needed
         return solution
+    
+    def get_utility_mat(self, solution):
+        return self.base_utility_matrix + solution.T
+
+    def difference_between_top_entries(self, V, B):
+        """
+        Finds the difference between the highest and second highest (or third if needed) entries
+        in V that are greater or equal to 0, based on a filtering provided by B.
+        
+        Args:
+        - V (numpy.ndarray): A vector of values.
+        - B (numpy.ndarray): A boolean vector indicating which elements of V to consider.
+        
+        Returns:
+        - float or None: The difference as specified or None if not enough entries above 0.
+        """
+        # Filter V by B and then select entries >= 0
+        filtered_V = V[B]
+        eligible_values = filtered_V[filtered_V >= 0]
+        
+        # Check if there are less than 2 eligible values
+        if eligible_values.size < 2:
+            return None
+        
+        # Sort eligible values in descending order
+        sorted_values = np.sort(eligible_values)[::-1]
+        
+        # Find the difference according to the rules
+        if sorted_values[0] != sorted_values[1]:
+            return sorted_values[0] - sorted_values[1]
+        else:
+            # If the first two are equal, look for a third distinct value
+            for i in range(2, len(sorted_values)):
+                if sorted_values[i] < sorted_values[0]:  # Find the next distinct value
+                    return sorted_values[0] - sorted_values[i]
+            # If no third distinct value found
+            return None
+        
+    def get_necessary_lowered_compensation_solution_for_customer_c(self, c, solution):
+        '''
+        This method returns the solution that materializes as the compensation for c is decreased
+        as much as needed for the next OD(s) to be excluded 
+        The difference from the other function is, that this time the 
+        utility is not decreased to 0 as much as possible in order to not
+        affect any other assignments'''
+        utility_mat = self.get_utility_mat
+        solution_copy = np.copy(solution)
+        try:
+            # Maximum Utility Vector
+            maximum_utility_vector = np.max(utility_mat, axis= 1)
+            # c-th column of the utility mat
+            c_column = utility_mat[:,c]
+            # Differences of the two
+            differences_vector = c_column - maximum_utility_vector
+            # Get the binary vector with differences
+            differences_vector_binary = differences_vector[differences_vector >= 0]
+            # Check how many possible assignments are made
+            number_possible_assignments = np.count_nonzero(differences_vector_binary)
+            # Check wether there is one assignment
+            if number_possible_assignments == 1:
+                solution_copy[c] = 0
+                return solution_copy
+            elif number_possible_assignments == 0:
+                return solution_copy
+            elif number_possible_assignments > 1:
+                # Identify the highest and the second highest difference
+                decrease = self.difference_between_top_entries(differences_vector, differences_vector_binary)
+                solution_copy[:,c] -= decrease
+                return solution_copy
+        except:
+            return solution_copy
+    
+    def get_decrease_without_harm_solution_for_customer_c(self, c, solution):
+        utility_mat = self.get_utility_mat
+        solution_copy = np.copy(solution)
+        try:
+            # Maximum Utility Vector
+            maximum_utility_vector = np.max(utility_mat, axis= 1)
+            # c-th column of the utility mat
+            c_column = utility_mat[:,c]
+            # Differences of the two
+            differences_vector = c_column - maximum_utility_vector
+            # Get the binary vector with differences
+            differences_vector_binary = differences_vector[differences_vector >= 0]
+            # Check how many possible assignments are made
+            number_possible_assignments = np.count_nonzero(differences_vector_binary)
+            # Check whether there is one assignment
+            if number_possible_assignments == 1:
+                no_harm_reduction = differences_vector[differences_vector_binary]
+                solution_copy[:, c] -= no_harm_reduction
+                return solution_copy
+            elif number_possible_assignments == 0:
+                return solution_copy
+            elif number_possible_assignments > 1:
+                # Identify the highest and the second highest difference
+                no_harm_reduction = np.min(differences_vector[differences_vector_binary])
+                solution_copy[:,c] -= no_harm_reduction
+                return solution_copy
+        except:
+            return solution_copy
+
+    def get_necessary_increased_compensation_solution_for_customer_c(self, c, solution):
+        '''
+        This method returns the solution that materializes as the compensation for c is decreased
+        as much as needed for the next OD(s) to be excluded 
+        The difference from the other function is, that this time the 
+        utility is not decreased to 0 as much as possible in order to not
+        affect any other assignments'''
+        utility_mat = self.get_utility_mat
+        solution_copy = np.copy(solution)
+        try:
+            # Maximum Utility Vector
+            maximum_utility_vector = np.max(utility_mat, axis= 1)
+            # c-th column of the utility mat
+            c_column = utility_mat[:,c]
+            # Differences of the two
+            differences_vector = c_column - maximum_utility_vector
+            # Get the binary vector with differences
+            differences_vector_binary = differences_vector[differences_vector < 0]
+            # Check how many possible assignments are made
+            minimum_necessary_increase = np.max(differences_vector[differences_vector_binary])
+            solution_copy[:, c] -= minimum_necessary_increase
+            return solution_copy
+        except:
+            return solution_copy
     
     def create_binary_matrix(self, U):
         max_values = np.max(U, axis=1)
