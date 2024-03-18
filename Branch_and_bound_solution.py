@@ -62,18 +62,12 @@ class branch_and_bound_ODCP():
         expected_savings = serving_probability * savings_generated_if_served
         return expected_savings
     
-    def neighborhood_search_lower_one_compensation(self, solution, expected_savings_now, best_assignment):
-        best_solution = solution
-        found_a_better_solution = False
+    def neighborhood_search_lower_one_compensation(self, solution):
+        solution_list = []
         for c in range(self.C):
-            lowered_compensation_solution = self.get_lowered_compensation_solution_for_customer_c(c, np.copy(solution))
-            expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(lowered_compensation_solution)
-            if expected_savings_for_solution > expected_savings_now:
-                found_a_better_solution = True
-                best_solution = lowered_compensation_solution
-                best_assignment = assignment
-                expected_savings_now = expected_savings_for_solution
-        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
+            increased_compensation_solution = self.get_lowered_compensation_solution_for_customer_c(c, np.copy(solution))
+            solution_list.append(increased_compensation_solution)
+        return solution_list
     
     def get_increased_compensation_solution_for_customer_c(self, c, solution):
         utility_vector_for_c = self.base_utility_matrix[:, c] + solution[c]
@@ -84,25 +78,12 @@ class branch_and_bound_ODCP():
         solution[c] = solution[c] + compensation_increase_needed
         return solution
     
-    def neighborhood_search_upper_one_compensation(self, solution, expected_savings_now, best_assignment):
-        best_solution = solution
-        found_a_better_solution = False
+    def neighborhood_search_upper_one_compensation(self, solution):
+        solution_list = []
         for c in range(self.C):
             increased_compensation_solution = self.get_increased_compensation_solution_for_customer_c(c, np.copy(solution))
-            expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(increased_compensation_solution)
-            if expected_savings_for_solution > expected_savings_now:
-                found_a_better_solution = True
-                best_solution = increased_compensation_solution
-                best_assignment = assignment
-                expected_savings_now = expected_savings_for_solution
-        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
-    
-    def initialize_search_parameters(self, length_of_neighborhood_list):
-        found_a_better_solution = [None for n in range(length_of_neighborhood_list)]
-        best_solution = [None for n in range(length_of_neighborhood_list)]
-        best_assignment = [None for n in range(length_of_neighborhood_list)]
-        expected_savings_now = [None for n in range(length_of_neighborhood_list)]
-        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
+            solution_list.append(increased_compensation_solution)
+        return solution_list
     
     def extract_best_solution(self, found_a_better_solution, best_solution, best_assignment, expected_savings_now):
         best_solution_index = np.argmax(expected_savings_now)
@@ -113,15 +94,19 @@ class branch_and_bound_ODCP():
     
     def neighborhood_search(self, solution):
         expected_savings_now, best_assignment = self.expected_savings_for_a_solution(solution)
-        neighborhood_list = [self.neighborhood_search_lower_one_compensation, self.neighborhood_search_upper_one_compensation]
-        found_a_better_solution, best_solution, best_assignment, best_expected_savings = self.initialize_search_parameters(len(neighborhood_list))
-        for count, neighborhood in enumerate(neighborhood_list):
-            found_a_better_solution[count], best_solution[count], best_assignment[count], best_expected_savings[count] = neighborhood(solution, expected_savings_now, best_assignment)
-        if any(found_a_better_solution):
-            found_a_better_solution, best_solution_of_the_search, best_assignment_of_the_search, best_objective_value = self.extract_best_solution(found_a_better_solution, best_solution, best_assignment, best_expected_savings)
-            return True, best_solution_of_the_search, best_assignment_of_the_search, best_objective_value
-        else:
-            return False, solution, best_assignment, expected_savings_now
+        best_solution = np.copy(solution)
+        found_a_better_solution = False
+        # Hier wird die gesamte Nachbarschaft erstellt (Die Funktionen sollten hier die solutions wiedergeben)
+        neighborhood_functions = [self.neighborhood_search_lower_one_compensation(np.copy(solution)), self.neighborhood_search_upper_one_compensation(np.copy(solution))]
+        neighborhood_list = [item for sublist in neighborhood_functions for item in sublist]
+        for sol in neighborhood_list:
+            expected_savings_for_solution, assignment = self.expected_savings_for_a_solution(sol)
+            if expected_savings_for_solution > expected_savings_now:
+                found_a_better_solution = True
+                best_solution = sol
+                best_assignment = assignment
+                expected_savings_now = expected_savings_for_solution
+        return found_a_better_solution, best_solution, best_assignment, expected_savings_now
 
     def iterative_decrease_a_solution_by_best_fit(self, solution):
         '''
